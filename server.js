@@ -6,7 +6,7 @@ app.use(express.json());
 
 // ===== MPWA CONFIG =====
 // 👉 Yaha apna MPWA api_key daalo
-const MPWA_API_KEY = "YAHAN_APNA_API_KEY_DALO";
+const MPWA_API_KEY = "s4b0g3qxsT0pUHPTtnES0KnFsAyROX";
 // 👉 Yaha apna WhatsApp sender number daalo (91 se start karein)
 const MPWA_SENDER = "918920700554";
 
