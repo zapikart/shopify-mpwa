@@ -1,13 +1,8 @@
 app = "shopify-mpwa"
 
-[build]
-builder = "heroku/buildpacks:20"
-
-[env]
-PORT = "8080"
-
 [http_service]
 internal_port = 8080
 force_https = true
-auto_stop = true
-auto_start = true
+auto_stop_machines = true
+auto_start_machines = true
+min_machines_running = 0
