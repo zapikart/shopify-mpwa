@@ -57,6 +57,6 @@ Thank you for shopping with us!`;
 
 app.get("/", (req, res) => res.send("MPWA + Shopify server working ✅"));
 
-// ⬇️ yaha port Railway/Render ka env use karega
-const PORT = process.env.PORT || 3000;
+// Fly.io / any hosting ke liye PORT env use karega
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log("Server running on port", PORT));
