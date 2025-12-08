@@ -254,7 +254,7 @@ async function sendWA(number, message) {
       sender: MPWA_SENDER,
       number,
       message,
-      footer: "Sent via MPWA",
+      footer: "Sent via ZapiKart.store",
     }),
   });
 }
