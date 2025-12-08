@@ -109,14 +109,24 @@ app.post("/verify-cod", async (req, res) => {
 
     const data = tempStore[phone].data;
 
+    const qtyNum = Number(data.quantity) || 1;
+    const totalNum = Number(data.total) || 0;
+
+    const lineItem = {
+      variant_id: Number(data.variant_id),
+      quantity: qtyNum,
+    };
+
+    // 👉 yahan se Shopify ko discounted price bhej rahe hain
+    if (!isNaN(totalNum) && totalNum > 0 && qtyNum > 0) {
+      const unitPrice = totalNum / qtyNum;
+      // Shopify ko per-unit price chahiye
+      lineItem.price = unitPrice.toFixed(2);
+    }
+
     const shopifyOrderPayload = {
       order: {
-        line_items: [
-          {
-            variant_id: Number(data.variant_id),
-            quantity: Number(data.quantity),
-          },
-        ],
+        line_items: [lineItem],
         billing_address: {
           name: data.name,
           address1: data.house,
@@ -305,7 +315,13 @@ function buildOrderSummary(order) {
   const variantTitle = line.variant_title || "";
   const qty = line.quantity || 1;
   const currency = order.currency || "INR";
-  const total = order.total_price || "0.00";
+
+  // try latest subtotal / total if available
+  const total =
+    order.current_total_price ||
+    order.current_subtotal_price ||
+    order.total_price ||
+    "0.00";
 
   const email = order.email || "N/A";
   const phone = billing.phone || shipping.phone || "N/A";
@@ -345,7 +361,7 @@ ${addressLines || "N/A"}
 `.trim();
 }
 
-// Tracking info helper
+// Tracking info helper (supports multiple Shopify formats)
 function getTrackingInfo(order) {
   const fulfillments = order.fulfillments || [];
   if (!fulfillments.length) return null;
@@ -356,14 +372,28 @@ function getTrackingInfo(order) {
       (ff) =>
         (ff.tracking_urls && ff.tracking_urls.length) ||
         ff.tracking_url ||
-        ff.tracking_number
+        ff.tracking_number ||
+        ff.tracking_info
     ) || fulfillments[0];
 
-  const url =
-    (f.tracking_urls && f.tracking_urls[0]) || f.tracking_url || null;
+  const info = f.tracking_info || {};
 
-  const company = f.tracking_company || "Courier";
-  const number = f.tracking_number || "";
+  const url =
+    (f.tracking_urls && f.tracking_urls[0]) ||
+    f.tracking_url ||
+    info.url ||
+    info.tracking_url ||
+    null;
+
+  const company =
+    f.tracking_company || info.company || info.tracking_company || "Courier";
+
+  const number =
+    f.tracking_number ||
+    (Array.isArray(f.tracking_numbers) && f.tracking_numbers[0]) ||
+    info.number ||
+    info.tracking_number ||
+    "";
 
   if (!url && !number) return null;
 
