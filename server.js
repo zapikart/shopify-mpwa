@@ -219,11 +219,25 @@ app.post("/order-updated", async (req, res) => {
     const summary = buildOrderSummary(order);
     const status = order.financial_status || "N/A";
 
+    // tracking info nikaalo
+    const tracking = getTrackingInfo(order);
+
+    // base message
+    let text = `🔄 *Order Update*\nYour order *${order.name}* has been updated.\n\n*Current Status:* ${status}\n\n${summary}`;
+
+    // agar fulfilment_status fulfilled hai + tracking mila hai
+    if (order.fulfillment_status === "fulfilled" && tracking) {
+      text += `
+
+📦 *Your order has been shipped!*
+*Courier:* ${tracking.company}${
+        tracking.number ? `\n*Tracking ID:* ${tracking.number}` : ""
+      }
+${tracking.url ? `*Track here:* ${tracking.url}` : ""}`;
+    }
+
     if (phone) {
-      await sendWA(
-        phone,
-        `🔄 *Order Update*\nYour order *${order.name}* has been updated.\n\n*Current Status:* ${status}\n\n${summary}`
-      );
+      await sendWA(phone, text);
     }
 
     res.sendStatus(200);
@@ -329,6 +343,31 @@ function buildOrderSummary(order) {
 • Shipping Address:
 ${addressLines || "N/A"}
 `.trim();
+}
+
+// Tracking info helper
+function getTrackingInfo(order) {
+  const fulfillments = order.fulfillments || [];
+  if (!fulfillments.length) return null;
+
+  // jis fulfillment me tracking ho usko pick karo
+  const f =
+    fulfillments.find(
+      (ff) =>
+        (ff.tracking_urls && ff.tracking_urls.length) ||
+        ff.tracking_url ||
+        ff.tracking_number
+    ) || fulfillments[0];
+
+  const url =
+    (f.tracking_urls && f.tracking_urls[0]) || f.tracking_url || null;
+
+  const company = f.tracking_company || "Courier";
+  const number = f.tracking_number || "";
+
+  if (!url && !number) return null;
+
+  return { url, company, number };
 }
 
 // -------------------------------------------
