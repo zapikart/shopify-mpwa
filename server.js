@@ -1,18 +1,29 @@
 const express = require("express");
-const fetch = require("node-fetch");
+const fetch = require("node-fetch"); // make sure node-fetch v2 installed
 const cors = require("cors");
+
 const app = express();
 
+// Middleware
 app.use(express.json());
-app.use(cors({ origin: "*" }));
+app.use(
+  cors({
+    origin: "*", // chaaho to yahan apne store ka domain de sakte ho
+  })
+);
 
-// ENV VARIABLES
+// Simple health check for Render
+app.get("/health", (req, res) => {
+  res.send("OK");
+});
+
+// ===== ENV VARIABLES =====
 const MPWA_API_KEY = process.env.MPWA_API_KEY;
 const MPWA_SENDER = process.env.MPWA_SENDER;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
 const SHOPIFY_STORE = process.env.SHOPIFY_STORE_DOMAIN;
 
-// TEMP STORE FOR OTP FLOW
+// Temporary in-memory store for OTP
 let tempStore = {};
 
 // -------------------------------------------
@@ -21,22 +32,46 @@ let tempStore = {};
 app.post("/start-cod", async (req, res) => {
   try {
     const {
-      name, phone, house, street, landmark,
-      city, state, pincode,
-      variant_id, quantity, total
+      name,
+      phone,
+      house,
+      street,
+      landmark,
+      city,
+      state,
+      pincode,
+      variant_id,
+      quantity,
+      total,
     } = req.body;
 
+    if (!phone || !variant_id || !quantity) {
+      return res
+        .status(400)
+        .json({ ok: false, msg: "Missing phone / variant / quantity" });
+    }
+
     const otp = Math.floor(100000 + Math.random() * 900000);
+
     tempStore[phone] = {
       otp,
       data: {
-        name, phone, house, street, landmark,
-        city, state, pincode,
-        variant_id, quantity, total
-      }
+        name,
+        phone,
+        house,
+        street,
+        landmark,
+        city,
+        state,
+        pincode,
+        variant_id,
+        quantity,
+        total,
+      },
     };
 
     const msg = `🔐 *OTP Verification*
+
 Hello ${name},
 Your OTP is *${otp}*.
 Order Amount: ₹${total}
@@ -45,9 +80,8 @@ Enter this OTP on website to confirm your COD order.`;
 
     await sendWA(phone, msg);
     res.json({ ok: true, msg: "OTP sent!" });
-
   } catch (error) {
-    console.log(error);
+    console.error("start-cod error:", error);
     res.status(500).json({ ok: false });
   }
 });
@@ -59,22 +93,23 @@ app.post("/verify-cod", async (req, res) => {
   try {
     const { phone, otp } = req.body;
 
-    if (!tempStore[phone])
+    if (!tempStore[phone]) {
       return res.json({ ok: false, msg: "Session expired" });
+    }
 
-    if (tempStore[phone].otp != otp)
+    if (String(tempStore[phone].otp) !== String(otp)) {
       return res.json({ ok: false, msg: "Invalid OTP" });
+    }
 
     const data = tempStore[phone].data;
 
-    // CREATE ORDER IN SHOPIFY
     const shopifyOrder = {
       order: {
         line_items: [
           {
             variant_id: Number(data.variant_id),
-            quantity: Number(data.quantity)
-          }
+            quantity: Number(data.quantity),
+          },
         ],
         billing_address: {
           name: data.name,
@@ -84,7 +119,7 @@ app.post("/verify-cod", async (req, res) => {
           province: data.state,
           phone: data.phone,
           zip: data.pincode,
-          country: "India"
+          country: "India",
         },
         shipping_address: {
           name: data.name,
@@ -94,11 +129,11 @@ app.post("/verify-cod", async (req, res) => {
           province: data.state,
           phone: data.phone,
           zip: data.pincode,
-          country: "India"
+          country: "India",
         },
         financial_status: "pending",
-        gateway: "Cash on Delivery"
-      }
+        gateway: "Cash on Delivery",
+      },
     };
 
     const response = await fetch(
@@ -107,9 +142,9 @@ app.post("/verify-cod", async (req, res) => {
         method: "POST",
         headers: {
           "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
         },
-        body: JSON.stringify(shopifyOrder)
+        body: JSON.stringify(shopifyOrder),
       }
     );
 
@@ -122,16 +157,15 @@ app.post("/verify-cod", async (req, res) => {
 
 Your COD order is successfully placed.
 
-Order No: *${order.order.name}*
+Order No: *${order.order?.name || "N/A"}*
 Total Amount: ₹${data.total}
 
 Thank you ❤️`
     );
 
-    res.json({ ok: true, order: order });
-
+    res.json({ ok: true, order });
   } catch (error) {
-    console.log(error);
+    console.error("verify-cod error:", error);
     res.status(500).json({ ok: false });
   }
 });
@@ -140,58 +174,79 @@ Thank you ❤️`
 // SHOPIFY WEBHOOK — ORDER CREATED
 // ---------------------------------------------------
 app.post("/order-created", async (req, res) => {
-  const order = req.body;
-  const phone = clean(order.billing_address?.phone);
+  try {
+    const order = req.body;
+    const phone = clean(order.billing_address?.phone);
 
-  if (phone) {
-    await sendWA(
-      phone,
-      `🆕 *Order Received!*\nYour order *${order.name}* has been successfully placed.\nTotal: ₹${order.total_price}`
-    );
+    if (phone) {
+      await sendWA(
+        phone,
+        `🆕 *Order Received!*
+Your order *${order.name}* has been successfully placed.
+Total: ₹${order.total_price}`
+      );
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("order-created error:", err);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
 // ---------------------------------------------------
 // SHOPIFY WEBHOOK — ORDER UPDATED
 // ---------------------------------------------------
 app.post("/order-updated", async (req, res) => {
-  const order = req.body;
-  const phone = clean(order.billing_address?.phone);
+  try {
+    const order = req.body;
+    const phone = clean(order.billing_address?.phone);
 
-  if (phone) {
-    await sendWA(
-      phone,
-      `🔄 *Order Update*\nYour order *${order.name}* has been updated.\nCurrent Status: ${order.financial_status}`
-    );
+    if (phone) {
+      await sendWA(
+        phone,
+        `🔄 *Order Update*
+Your order *${order.name}* has been updated.
+Current Status: ${order.financial_status}`
+      );
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("order-updated error:", err);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
 // ---------------------------------------------------
 // SHOPIFY WEBHOOK — ORDER CANCELLED
 // ---------------------------------------------------
 app.post("/order-cancelled", async (req, res) => {
-  const order = req.body;
-  const phone = clean(order.billing_address?.phone);
+  try {
+    const order = req.body;
+    const phone = clean(order.billing_address?.phone);
 
-  if (phone) {
-    await sendWA(
-      phone,
-      `❌ *Order Cancelled*\nYour order *${order.name}* has been cancelled.\nIf this was a mistake, you can reorder anytime.`
-    );
+    if (phone) {
+      await sendWA(
+        phone,
+        `❌ *Order Cancelled*
+Your order *${order.name}* has been cancelled.
+If this was a mistake, you can reorder anytime.`
+      );
+    }
+
+    res.sendStatus(200);
+  } catch (err) {
+    console.error("order-cancelled error:", err);
+    res.sendStatus(500);
   }
-
-  res.sendStatus(200);
 });
 
 // -------------------------------------------
-// HELPER FUNCTION → SEND WHATSAPP MESSAGE
+// HELPERS
 // -------------------------------------------
 async function sendWA(number, message) {
-  return await fetch("https://codesai.dev/send-message", {
+  return fetch("https://codesai.dev/send-message", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -199,8 +254,8 @@ async function sendWA(number, message) {
       sender: MPWA_SENDER,
       number,
       message,
-      footer: "Sent via MPWA"
-    })
+      footer: "Sent via MPWA",
+    }),
   });
 }
 
@@ -208,7 +263,9 @@ function clean(num) {
   return num ? num.replace(/[^0-9]/g, "") : null;
 }
 
-app.get("/", (req, res) => res.send("COD OTP + Notifications Server Running ✔️"));
+app.get("/", (req, res) =>
+  res.send("COD OTP + Notifications Server (Render) Running ✔️")
+);
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log("Running on PORT", PORT));
