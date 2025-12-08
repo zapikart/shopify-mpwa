@@ -1,10 +1,14 @@
+// server.js
+
 const express = require("express");
-const fetch = require("node-fetch"); // make sure node-fetch v2 installed
+const fetch = require("node-fetch"); // node-fetch v2
 const cors = require("cors");
 
 const app = express();
 
-// Middleware
+// ----------------------
+// MIDDLEWARE
+// ----------------------
 app.use(express.json());
 app.use(
   cors({
@@ -17,7 +21,9 @@ app.get("/health", (req, res) => {
   res.send("OK");
 });
 
-// ===== ENV VARIABLES =====
+// ----------------------
+// ENV VARIABLES
+// ----------------------
 const MPWA_API_KEY = process.env.MPWA_API_KEY;
 const MPWA_SENDER = process.env.MPWA_SENDER;
 const SHOPIFY_TOKEN = process.env.SHOPIFY_ADMIN_TOKEN;
@@ -72,7 +78,7 @@ app.post("/start-cod", async (req, res) => {
 
     const msg = `🔐 *OTP Verification*
 
-Hello ${name},
+Hello ${name || "Customer"},
 Your OTP is *${otp}*.
 Order Amount: ₹${total}
 
@@ -103,7 +109,7 @@ app.post("/verify-cod", async (req, res) => {
 
     const data = tempStore[phone].data;
 
-    const shopifyOrder = {
+    const shopifyOrderPayload = {
       order: {
         line_items: [
           {
@@ -144,26 +150,30 @@ app.post("/verify-cod", async (req, res) => {
           "X-Shopify-Access-Token": SHOPIFY_TOKEN,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(shopifyOrder),
+        body: JSON.stringify(shopifyOrderPayload),
       }
     );
 
-    const order = await response.json();
+    const orderJson = await response.json();
+
+    if (!response.ok) {
+      console.error("Shopify order error:", orderJson);
+      return res
+        .status(500)
+        .json({ ok: false, msg: "Shopify order create failed" });
+    }
+
     delete tempStore[phone];
+
+    const shopifyOrder = orderJson.order || orderJson;
+    const summary = buildOrderSummary(shopifyOrder);
 
     await sendWA(
       phone,
-      `🎉 *Order Confirmed!*
-
-Your COD order is successfully placed.
-
-Order No: *${order.order?.name || "N/A"}*
-Total Amount: ₹${data.total}
-
-Thank you ❤️`
+      `🎉 *COD Order Placed Successfully!*\n\n${summary}\n\nThank you ❤️`
     );
 
-    res.json({ ok: true, order });
+    res.json({ ok: true, order: orderJson });
   } catch (error) {
     console.error("verify-cod error:", error);
     res.status(500).json({ ok: false });
@@ -176,14 +186,16 @@ Thank you ❤️`
 app.post("/order-created", async (req, res) => {
   try {
     const order = req.body;
-    const phone = clean(order.billing_address?.phone);
+    const phone = clean(
+      order.billing_address?.phone || order.shipping_address?.phone
+    );
+
+    const summary = buildOrderSummary(order);
 
     if (phone) {
       await sendWA(
         phone,
-        `🆕 *Order Received!*
-Your order *${order.name}* has been successfully placed.
-Total: ₹${order.total_price}`
+        `🧾 *Order Confirmed!*\n\n${summary}\n\nThank you for shopping with us ❤️`
       );
     }
 
@@ -200,14 +212,17 @@ Total: ₹${order.total_price}`
 app.post("/order-updated", async (req, res) => {
   try {
     const order = req.body;
-    const phone = clean(order.billing_address?.phone);
+    const phone = clean(
+      order.billing_address?.phone || order.shipping_address?.phone
+    );
+
+    const summary = buildOrderSummary(order);
+    const status = order.financial_status || "N/A";
 
     if (phone) {
       await sendWA(
         phone,
-        `🔄 *Order Update*
-Your order *${order.name}* has been updated.
-Current Status: ${order.financial_status}`
+        `🔄 *Order Update*\nYour order *${order.name}* has been updated.\n\n*Current Status:* ${status}\n\n${summary}`
       );
     }
 
@@ -224,14 +239,17 @@ Current Status: ${order.financial_status}`
 app.post("/order-cancelled", async (req, res) => {
   try {
     const order = req.body;
-    const phone = clean(order.billing_address?.phone);
+    const phone = clean(
+      order.billing_address?.phone || order.shipping_address?.phone
+    );
+
+    const summary = buildOrderSummary(order);
+    const reason = order.cancel_reason || "N/A";
 
     if (phone) {
       await sendWA(
         phone,
-        `❌ *Order Cancelled*
-Your order *${order.name}* has been cancelled.
-If this was a mistake, you can reorder anytime.`
+        `❌ *Order Cancelled*\nYour order *${order.name}* has been cancelled.\n\n*Reason:* ${reason}\n\n${summary}\n\nIf this was a mistake, you can reorder anytime.`
       );
     }
 
@@ -263,9 +281,80 @@ function clean(num) {
   return num ? num.replace(/[^0-9]/g, "") : null;
 }
 
+// Order summary for WhatsApp messages
+function buildOrderSummary(order) {
+  const line = (order.line_items && order.line_items[0]) || {};
+  const billing = order.billing_address || {};
+  const shipping = order.shipping_address || {};
+
+  const productTitle = line.title || "N/A";
+  const variantTitle = line.variant_title || "";
+  const qty = line.quantity || 1;
+  const currency = order.currency || "INR";
+  const total = order.total_price || "0.00";
+
+  const email = order.email || "N/A";
+  const phone = billing.phone || shipping.phone || "N/A";
+
+  const addressLines = [
+    shipping.name || billing.name,
+    shipping.address1 || billing.address1,
+    shipping.address2 || billing.address2,
+    `${shipping.city || billing.city || ""}${
+      shipping.city || billing.city ? "," : ""
+    } ${shipping.province || billing.province || ""}`,
+    `${shipping.zip || billing.zip || ""}`,
+    shipping.country || billing.country || "India",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const status = order.financial_status || "N/A";
+  const fulfillment = order.fulfillment_status || "unfulfilled";
+
+  return `
+• Product: ${productTitle}${
+    variantTitle ? " (" + variantTitle + ")" : ""
+  }
+• Qty: ${qty}
+• Total: ₹${total} ${currency}
+
+• Order No: ${order.name || "N/A"}
+• Email: ${email}
+• Phone: ${phone}
+
+• Payment Status: ${status}
+• Fulfilment Status: ${fulfillment}
+
+• Shipping Address:
+${addressLines || "N/A"}
+`.trim();
+}
+
+// -------------------------------------------
+// ROOT
+// -------------------------------------------
 app.get("/", (req, res) =>
   res.send("COD OTP + Notifications Server (Render) Running ✔️")
 );
 
+// -------------------------------------------
+// START SERVER + KEEP-ALIVE
+// -------------------------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log("Running on PORT", PORT));
+
+app.listen(PORT, () => {
+  console.log("Running on PORT", PORT);
+
+  // KEEP SERVER AWAKE (Render free trick)
+  setInterval(() => {
+    fetch(`http://127.0.0.1:${PORT}/health`)
+      .then(() =>
+        console.log(
+          "KeepAlive ping sent at",
+          new Date().toLocaleTimeString("en-IN")
+        )
+      )
+      .catch((err) => console.log("KeepAlive error:", err.message));
+  }, 4 * 60 * 1000); // har 4 minute me ping
+});
